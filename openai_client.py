@@ -60,7 +60,7 @@ async def run_agent(
     )
 
     response = await client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.3-70b-versatile-multilingual-preview",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
         response_format={"type": "json_object"},
