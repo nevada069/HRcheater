@@ -237,7 +237,7 @@ async def handle_country(call: CallbackQuery, state: FSMContext):
             extra_prefs=extra_prefs,
         )
     except Exception as e:
-        logging.exception("OpenAI error")
+        logging.exception("LLM error")
         await call.message.answer(f"Ошибка при обращении к модели: {e}\nПопробуй ещё раз — /start")
         await state.clear()
         return

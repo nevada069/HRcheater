@@ -2,10 +2,13 @@ import json
 from dataclasses import dataclass
 from typing import Optional
 from openai import AsyncOpenAI
-from config import OPENAI_API_KEY
+from config import GROQ_API_KEY
 from prompts import build_system_prompt
 
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+client = AsyncOpenAI(
+    api_key=GROQ_API_KEY,
+    base_url="https://api.groq.com/openai/v1",
+)
 
 
 @dataclass
@@ -57,7 +60,7 @@ async def run_agent(
     )
 
     response = await client.chat.completions.create(
-        model="gpt-4o",
+        model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
         response_format={"type": "json_object"},
