@@ -1,14 +1,30 @@
 import os
+import random
 from fpdf import FPDF
 from config import FONT_PATH, FONT_BOLD_PATH
 from openai_client import ResumeData
 
-# ── Цветовая палитра ──────────────────────────────────────────────────────────
-ACCENT       = (31, 73, 125)    # тёмно-синий — хедер и заголовки
-ACCENT_LIGHT = (235, 241, 250)  # светло-голубой — фон сайдбара
-DIVIDER      = (180, 195, 215)  # линии-разделители
-TEXT_DARK    = (30, 30, 30)     # основной текст
-TEXT_MUTED   = (100, 100, 110)  # вторичный текст (даты, подзаголовки)
+# ── Палитры (accent, accent_light, divider) ───────────────────────────────────
+_PALETTES = [
+    {"name": "Navy",    "accent": (31,  73,  125), "light": (235, 241, 250), "divider": (180, 195, 215)},
+    {"name": "Forest",  "accent": (34,  85,  56),  "light": (236, 245, 239), "divider": (170, 205, 180)},
+    {"name": "Slate",   "accent": (55,  71,  90),  "light": (238, 241, 245), "divider": (180, 190, 205)},
+    {"name": "Plum",    "accent": (90,  50,  115),  "light": (243, 238, 250), "divider": (200, 180, 220)},
+    {"name": "Rust",    "accent": (140, 60,  40),  "light": (250, 241, 238), "divider": (215, 185, 175)},
+    {"name": "Teal",    "accent": (25,  105, 110), "light": (234, 246, 247), "divider": (165, 210, 213)},
+    {"name": "Graphite","accent": (50,  50,  50),  "light": (242, 242, 242), "divider": (190, 190, 190)},
+    {"name": "Indigo",  "accent": (55,  60,  145), "light": (237, 238, 252), "divider": (175, 178, 225)},
+]
+
+def _pick_palette() -> dict:
+    return random.choice(_PALETTES)
+
+# Глобальные переменные палитры — переназначаются при каждой генерации
+ACCENT       = (31, 73, 125)
+ACCENT_LIGHT = (235, 241, 250)
+DIVIDER      = (180, 195, 215)
+TEXT_DARK    = (30, 30, 30)
+TEXT_MUTED   = (100, 100, 110)
 WHITE        = (255, 255, 255)
 
 # ── Геометрия страницы ────────────────────────────────────────────────────────
@@ -74,6 +90,10 @@ class ResumePDF(FPDF):
 
 
 def generate_pdf(resume: ResumeData, output_path: str):
+    global ACCENT, ACCENT_LIGHT, DIVIDER
+    palette = _pick_palette()
+    ACCENT, ACCENT_LIGHT, DIVIDER = palette["accent"], palette["light"], palette["divider"]
+
     pdf = ResumePDF()
     pdf.add_page()
 
