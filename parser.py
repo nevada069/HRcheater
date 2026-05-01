@@ -25,23 +25,30 @@ def extract_from_docx(file_path: str) -> str:
     return text
 
 
-def prepare_resume_text(text: str) -> str:
+def prepare_resume_text(text: str, from_url: bool = False) -> str:
     text = text.strip()
     if len(text) > RESUME_MAX_CHARS:
-        raise TextTooLongError(
-            f"Резюме слишком длинное ({len(text)} символов). "
-            f"Максимум — {RESUME_MAX_CHARS} символов. "
-            "Пожалуйста, сократите текст и попробуйте снова."
-        )
+        if from_url:
+            # Парсер уже обрезал до _MAX_PARSED_CHARS, но подстрахуемся ещё раз
+            text = text[:RESUME_MAX_CHARS]
+        else:
+            raise TextTooLongError(
+                f"Резюме слишком длинное ({len(text)} символов). "
+                f"Максимум — {RESUME_MAX_CHARS} символов. "
+                "Пожалуйста, сократите текст и попробуйте снова."
+            )
     return text
 
 
-def prepare_vacancy_text(text: str) -> str:
+def prepare_vacancy_text(text: str, from_url: bool = False) -> str:
     text = text.strip()
     if len(text) > VACANCY_MAX_CHARS:
-        raise TextTooLongError(
-            f"Описание вакансии слишком длинное ({len(text)} символов). "
-            f"Максимум — {VACANCY_MAX_CHARS} символов. "
-            "Пожалуйста, сократите текст и попробуйте снова."
-        )
+        if from_url:
+            text = text[:VACANCY_MAX_CHARS]
+        else:
+            raise TextTooLongError(
+                f"Описание вакансии слишком длинное ({len(text)} символов). "
+                f"Максимум — {VACANCY_MAX_CHARS} символов. "
+                "Пожалуйста, сократите текст и попробуйте снова."
+            )
     return text

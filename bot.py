@@ -27,6 +27,8 @@ from parser import (
 from openai_client import run_agent
 from pdf_generator import generate_pdf
 from prompts import GRADE_INSTRUCTIONS, DIRECTION_INSTRUCTIONS
+from hh_parser import fetch_vacancy, extract_vacancy_id, HHParseError
+from resume_parser import fetch_resume_from_url, is_url, ResumeParseError
 
 logging.basicConfig(level=logging.INFO)
 
@@ -41,32 +43,18 @@ class Form(StatesGroup):
     upload_vacancy = State()
     q_direction = State()
     q_grade = State()
-    q_stack = State()
-    q_company_size = State()
-    q_role = State()
-    q_country = State()
     processing = State()
 
 
 # ── Keyboard helpers ──────────────────────────────────────────────────────────
 
-def make_keyboard(options: list[str], skip: bool = False) -> InlineKeyboardMarkup:
+def make_keyboard(options: list[str]) -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(text=o, callback_data=o)] for o in options]
-    if skip:
-        buttons.append([InlineKeyboardButton(text="Пропустить", callback_data="__skip__")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 DIRECTIONS = list(DIRECTION_INSTRUCTIONS.keys())
 GRADES = list(GRADE_INSTRUCTIONS.keys())
-
-STACKS = [
-    "Python", "JavaScript / TypeScript", "Java", "Go", "C# / .NET",
-    "Swift / iOS", "Kotlin / Android", "PHP", "Ruby", "Rust", "Другой",
-]
-COMPANY_SIZES = ["Стартап (до 50)", "Средняя (50–500)", "Корпорация (500+)", "Без разницы"]
-ROLES = ["Разработчик (IC)", "Тимлид", "Архитектор", "Без разницы"]
-COUNTRIES = ["Россия", "СНГ", "Европа", "США / Канада", "Без разницы"]
 
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
@@ -77,7 +65,11 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.set_state(Form.upload_resume)
     await message.answer(
         "Привет! Я помогу адаптировать твоё резюме под вакансию.\n\n"
-        "Шаг 1 из 8. Отправь резюме — файлом (PDF или DOCX) или текстом."
+        "Шаг 1 из 4. Отправь резюме одним из способов:\n"
+        "• Файл PDF или DOCX\n"
+        "• Ссылка с hh.ru (hh.ru/resume/...)\n"
+        "• Ссылка на публичную страницу (портфолио и т.д.)\n"
+        "• Просто текст"
     )
 
 
@@ -85,6 +77,7 @@ async def cmd_start(message: Message, state: FSMContext):
 @dp.message(Form.upload_resume)
 async def handle_resume(message: Message, state: FSMContext):
     resume_text = None
+    from_url = False
 
     if message.document:
         file = message.document
@@ -110,31 +103,57 @@ async def handle_resume(message: Message, state: FSMContext):
             os.unlink(tmp_path)
 
     elif message.text:
-        resume_text = message.text
+        raw = message.text.strip()
+        if is_url(raw):
+            await message.answer("Загружаю резюме по ссылке...")
+            try:
+                resume_text = await fetch_resume_from_url(raw)
+            except ResumeParseError as e:
+                await message.answer(str(e))
+                return
+            from_url = True
+        else:
+            resume_text = raw
+            from_url = False
     else:
-        await message.answer("Пожалуйста, отправь файл или текст резюме.")
+        await message.answer("Пожалуйста, отправь файл, ссылку или текст резюме.")
         return
 
     try:
-        resume_text = prepare_resume_text(resume_text)
+        resume_text = prepare_resume_text(resume_text, from_url=from_url)
     except TextTooLongError as e:
         await message.answer(str(e))
         return
 
     await state.update_data(resume_text=resume_text)
     await state.set_state(Form.upload_vacancy)
-    await message.answer("Шаг 2 из 8. Теперь отправь текст вакансии.")
+    await message.answer(
+        "Шаг 2 из 4. Отправь вакансию — текстом или ссылкой с hh.ru.\n\n"
+        "Пример: https://hh.ru/vacancy/12345678"
+    )
 
 
 # Step 2 — Vacancy
 @dp.message(Form.upload_vacancy)
 async def handle_vacancy(message: Message, state: FSMContext):
     if not message.text:
-        await message.answer("Пожалуйста, отправь текст вакансии.")
+        await message.answer("Пожалуйста, отправь текст вакансии или ссылку с hh.ru.")
         return
 
+    raw_text = message.text.strip()
+
+    vacancy_from_url = False
+    if extract_vacancy_id(raw_text):
+        await message.answer("Получаю вакансию с hh.ru...")
+        try:
+            raw_text = await fetch_vacancy(raw_text)
+        except HHParseError as e:
+            await message.answer(f"Не удалось загрузить вакансию: {e}\n\nПопробуй скопировать текст вручную.")
+            return
+        vacancy_from_url = True
+
     try:
-        vacancy_text = prepare_vacancy_text(message.text)
+        vacancy_text = prepare_vacancy_text(raw_text, from_url=vacancy_from_url)
     except TextTooLongError as e:
         await message.answer(str(e))
         return
@@ -142,7 +161,7 @@ async def handle_vacancy(message: Message, state: FSMContext):
     await state.update_data(vacancy_text=vacancy_text)
     await state.set_state(Form.q_direction)
     await message.answer(
-        "Шаг 3 из 8. Выбери направление:",
+        "Шаг 3 из 4. Выбери направление:",
         reply_markup=make_keyboard(DIRECTIONS),
     )
 
@@ -154,79 +173,20 @@ async def handle_direction(call: CallbackQuery, state: FSMContext):
     await state.update_data(direction=call.data)
     await state.set_state(Form.q_grade)
     await call.message.answer(
-        "Шаг 4 из 8. Выбери грейд:",
+        "Шаг 4 из 4. Выбери целевой грейд:",
         reply_markup=make_keyboard(GRADES),
     )
 
 
-# Step 4 — Grade
+# Step 4 — Grade → сразу запуск
 @dp.callback_query(Form.q_grade)
 async def handle_grade(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await state.update_data(grade=call.data)
-    await state.set_state(Form.q_stack)
-    await call.message.answer(
-        "Шаг 5 из 8. Желаемый стек технологий:",
-        reply_markup=make_keyboard(STACKS, skip=True),
-    )
-
-
-# Step 5 — Stack (optional)
-@dp.callback_query(Form.q_stack)
-async def handle_stack(call: CallbackQuery, state: FSMContext):
-    await call.answer()
-    value = None if call.data == "__skip__" else call.data
-    await state.update_data(stack=value)
-    await state.set_state(Form.q_company_size)
-    await call.message.answer(
-        "Шаг 6 из 8. Размер компании:",
-        reply_markup=make_keyboard(COMPANY_SIZES, skip=True),
-    )
-
-
-# Step 6 — Company size (optional)
-@dp.callback_query(Form.q_company_size)
-async def handle_company_size(call: CallbackQuery, state: FSMContext):
-    await call.answer()
-    value = None if call.data == "__skip__" else call.data
-    await state.update_data(company_size=value)
-    await state.set_state(Form.q_role)
-    await call.message.answer(
-        "Шаг 7 из 8. Желаемая роль:",
-        reply_markup=make_keyboard(ROLES, skip=True),
-    )
-
-
-# Step 7 — Role (optional)
-@dp.callback_query(Form.q_role)
-async def handle_role(call: CallbackQuery, state: FSMContext):
-    await call.answer()
-    value = None if call.data == "__skip__" else call.data
-    await state.update_data(role=value)
-    await state.set_state(Form.q_country)
-    await call.message.answer(
-        "Шаг 8 из 8. Целевой рынок:",
-        reply_markup=make_keyboard(COUNTRIES, skip=True),
-    )
-
-
-# Step 8 — Country (optional) → trigger processing
-@dp.callback_query(Form.q_country)
-async def handle_country(call: CallbackQuery, state: FSMContext):
-    await call.answer()
-    value = None if call.data == "__skip__" else call.data
-    await state.update_data(country=value)
     await state.set_state(Form.processing)
 
     data = await state.get_data()
-    await call.message.answer("Генерирую резюме... Это займёт около 30 секунд.")
-
-    extra_prefs = {
-        "stack": data.get("stack"),
-        "company_size": data.get("company_size"),
-        "role": data.get("role"),
-        "country": data.get("country"),
-    }
+    await call.message.answer("Анализирую и адаптирую резюме... Это займёт ~15 секунд.")
 
     try:
         result = await run_agent(
@@ -234,7 +194,7 @@ async def handle_country(call: CallbackQuery, state: FSMContext):
             direction=data["direction"],
             resume_text=data["resume_text"],
             vacancy_text=data["vacancy_text"],
-            extra_prefs=extra_prefs,
+            extra_prefs={},
         )
     except Exception as e:
         logging.exception("LLM error")
@@ -242,14 +202,36 @@ async def handle_country(call: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Send score
+    # Score
     score_msg = (
         f"Оценка соответствия: {result.score}/10\n\n"
         f"{result.score_reasoning}"
     )
     await call.message.answer(score_msg)
 
-    # Generate and send PDF
+    # Gap report
+    gap = result.gap_report
+    gap_parts = []
+
+    if gap.strengths:
+        lines = "\n".join(f"  ✅ {s}" for s in gap.strengths)
+        gap_parts.append(f"*Что совпадает с вакансией:*\n{lines}")
+
+    if gap.gaps:
+        lines = "\n".join(f"  ❌ {g}" for g in gap.gaps)
+        gap_parts.append(f"*Чего не хватает:*\n{lines}")
+
+    if gap.reframeable:
+        lines = "\n".join(f"  🔄 {r}" for r in gap.reframeable)
+        gap_parts.append(f"*Можно переформулировать под вакансию:*\n{lines}")
+
+    if gap_parts:
+        await call.message.answer(
+            "📋 *Анализ соответствия:*\n\n" + "\n\n".join(gap_parts),
+            parse_mode="Markdown",
+        )
+
+    # PDF
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         pdf_path = tmp.name
 
