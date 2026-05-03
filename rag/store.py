@@ -35,9 +35,21 @@ def _get_collection() -> chromadb.Collection:
         metadata={"hnsw:space": "cosine"},
     )
 
-    # Наполняем только если коллекция пустая (первый запуск)
-    if col.count() == 0:
-        logger.info("RAG store: первый запуск, индексируем %d документов...", len(DOCUMENTS))
+    stored_count = col.count()
+    expected_count = len(DOCUMENTS)
+
+    # Переиндексируем если база пустая или документы добавились/изменились
+    if stored_count != expected_count:
+        logger.info(
+            "RAG store: документов в базе %d, в knowledge_base.py %d — переиндексируем...",
+            stored_count, expected_count,
+        )
+        if stored_count > 0:
+            # Удаляем все старые документы по id
+            existing = col.get(include=[])
+            if existing["ids"]:
+                col.delete(ids=existing["ids"])
+
         col.add(
             ids=[d["id"] for d in DOCUMENTS],
             documents=[d["text"] for d in DOCUMENTS],
@@ -46,9 +58,9 @@ def _get_collection() -> chromadb.Collection:
                 for d in DOCUMENTS
             ],
         )
-        logger.info("RAG store: индексация завершена")
+        logger.info("RAG store: индексация завершена (%d документов)", len(DOCUMENTS))
     else:
-        logger.info("RAG store: загружена существующая коллекция (%d документов)", col.count())
+        logger.info("RAG store: загружена существующая коллекция (%d документов)", stored_count)
 
     _collection = col
     return _collection
