@@ -58,31 +58,10 @@ _PROMPT = """Ты — строгий независимый оценщик ре�
 - Если кандидат явно Junior а нужен Senior — это 2.0-3.5, не 6.0
 - Если кандидат точно в стеке и грейде — это 8.5-9.5, не 7.0
 
-━━━ ЗАДАЧА ━━━
-Также проверь адаптированное резюме на галлюцинации:
-
-АДАПТИРОВАННОЕ РЕЗЮМЕ:
-{adapted_json}
-
-Найди технологии/компании/факты которых НЕТ в оригинальных данных. Удали их.
-
 Верни ТОЛЬКО валидный JSON:
 {{
   "score": <число с одним знаком после запятой, строго по рубрику выше>,
-  "score_reasoning": "2-3 конкретных предложения: сколько must-have закрыто, какие главные gaps, почему именно такой балл",
-  "hallucinations_found": ["галлюцинация 1" или пустой список],
-  "resume": {{
-    "name": "ФИО",
-    "contacts": "контакты",
-    "summary": "summary",
-    "experience": [
-      {{"company": "название", "role": "должность", "start": "дата", "end": "дата", "description": "описание"}}
-    ],
-    "skills": ["навык1"],
-    "education": [
-      {{"institution": "название", "degree": "степень", "year": "год"}}
-    ]
-  }}
+  "score_reasoning": "2-3 конкретных предложения: сколько must-have закрыто, какие главные gaps, почему именно такой балл"
 }}"""
 
 
@@ -159,43 +138,9 @@ async def validate_and_score(
 
     llm_score = float(data.get("score", 5.0))
 
-    # Финальный score: взвешенная комбинация
     final_score = round(0.55 * llm_score + 0.45 * kw_score, 1)
-    logger.info(
-        "Scoring: llm=%.1f  keyword=%.1f  final=%.1f",
-        llm_score, kw_score, final_score,
-    )
+    logger.info("Scoring: llm=%.1f  keyword=%.1f  final=%.1f", llm_score, kw_score, final_score)
 
-    resume_raw = data.get("resume", {})
-    experience = [
-        ExperienceItem(
-            company=e.get("company", ""),
-            role=e.get("role", ""),
-            start=e.get("start", ""),
-            end=e.get("end", ""),
-            description=e.get("description", ""),
-        )
-        for e in resume_raw.get("experience", [])
-    ]
-    education = [
-        EducationItem(
-            institution=e.get("institution", ""),
-            degree=e.get("degree", ""),
-            year=e.get("year", ""),
-        )
-        for e in resume_raw.get("education", [])
-    ]
-
-    final_resume = ResumeData(
-        name=resume_raw.get("name", adapted.name),
-        contacts=resume_raw.get("contacts", adapted.contacts),
-        summary=resume_raw.get("summary", adapted.summary),
-        experience=experience,
-        skills=resume_raw.get("skills", adapted.skills),
-        education=education,
-    )
-
-    # Дополняем reasoning информацией о keyword overlap
     llm_reasoning = data.get("score_reasoning", "")
     full_reasoning = (
         f"{llm_reasoning}\n\n"
@@ -206,6 +151,6 @@ async def validate_and_score(
     return PipelineResult(
         score=final_score,
         score_reasoning=full_reasoning,
-        resume=final_resume,
+        resume=adapted,   # адаптор — финальная версия, валидатор не трогает
         gap_report=gap_report,
     )

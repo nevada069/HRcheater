@@ -31,6 +31,7 @@ _HEADERS = {
 }
 
 _VACANCY_ID_RE = re.compile(r"hh\.ru/vacancy/(\d+)", re.IGNORECASE)
+_RESUME_ID_RE  = re.compile(r"hh\.ru/resume/([a-f0-9]{24,})", re.IGNORECASE)
 _HTML_TAGS_RE = re.compile(r"<[^>]+>")
 # schema.org JobPosting живёт в <script type="application/ld+json">
 _JSONLD_RE = re.compile(
@@ -47,6 +48,49 @@ def extract_vacancy_id(url: str) -> str | None:
     """Вытаскивает числовой ID вакансии из URL. Возвращает None если не hh.ru-ссылка."""
     m = _VACANCY_ID_RE.search(url)
     return m.group(1) if m else None
+
+
+def is_hh_vacancy_url(url: str) -> bool:
+    return bool(_VACANCY_ID_RE.search(url))
+
+
+def is_hh_resume_url(url: str) -> bool:
+    return bool(_RESUME_ID_RE.search(url))
+
+
+# Для любых других URL — простая эвристика по тексту
+_RESUME_SIGNALS  = re.compile(
+    r"(опыт работы|education|curriculum vitae|\bcv\b|резюме|навыки|skills|портфолио)",
+    re.IGNORECASE,
+)
+_VACANCY_SIGNALS = re.compile(
+    r"(вакансия|vacancy|требования|обязанности|условия работы|мы ищем|зарплата|salary)",
+    re.IGNORECASE,
+)
+
+
+def detect_content_type(text: str) -> str:
+    """
+    Определяет тип контента по тексту или URL.
+    Возвращает: 'vacancy' | 'resume' | 'unknown'
+    """
+    url_lower = text.strip().lower()
+
+    # URL-детекция — самая точная
+    if is_hh_vacancy_url(url_lower):
+        return "vacancy"
+    if is_hh_resume_url(url_lower):
+        return "resume"
+
+    # Текстовая эвристика
+    vacancy_score = len(_VACANCY_SIGNALS.findall(text))
+    resume_score  = len(_RESUME_SIGNALS.findall(text))
+
+    if vacancy_score > resume_score:
+        return "vacancy"
+    if resume_score > vacancy_score:
+        return "resume"
+    return "unknown"
 
 
 def _strip_html(text: str) -> str:
