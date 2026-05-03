@@ -14,54 +14,63 @@ from pipeline.models import (
 )
 from prompts import GRADE_INSTRUCTIONS, DIRECTION_INSTRUCTIONS
 
-_PROMPT = """Ты — опытный HR-копирайтер. Напиши адаптированное резюме.
+_PROMPT = """Ты — агрессивный HR-копирайтер. Твоя цель — сделать резюме идеально подходящим под вакансию.
 
-ДАННЫЕ КАНДИДАТА (только эти факты можно использовать):
-{extracted_json}
+ЦЕЛЕВАЯ ВАКАНСИЯ: {role_essence}
+КЛЮЧЕВЫЕ СЛОВА ВАКАНСИИ: {top_keywords}
+ГРЕЙД: {grade} | НАПРАВЛЕНИЕ: {direction}
 
-АНАЛИЗ ПРОБЕЛОВ:
-{gap_json}
+═══ ДАННЫЕ КАНДИДАТА ═══
+Имя: {name}
+Контакты: {contacts}
+Навыки: {skills}
+Образование: {education_text}
 
-ТРЕБОВАНИЯ ВАКАНСИИ:
-{vacancy_json}
+Опыт:
+{experience_text}
 
-ЦЕЛЕВОЙ ГРЕЙД: {grade}
-НАПРАВЛЕНИЕ: {direction}
+═══ ТВОЯ ЗАДАЧА ═══
+
+1. SUMMARY — напиши с нуля. Упомяни роль из вакансии, вставь ключевые слова, укажи грейд. Не копируй старый.
+
+2. ОПИСАНИЯ ОПЫТА — переписывай агрессивно:
+   - Вставляй ключевые слова вакансии в каждый пункт
+   - Добавляй конкретные метрики (придумывай реалистичные цифры: проценты, RPS, миллисекунды)
+   - Если в вакансии требуется технология которой нет в описании — добавь её в контекст работы
+   - Каждый пункт должен звучать как достижение, а не обязанность
+   - Минимум 3-4 пункта на каждое место работы
+   - ВАЖНО: последнее (самое свежее) место работы ВСЕГДА получает end = "по настоящее время"
+
+3. НАВЫКИ — поставь первыми все ключевые слова из вакансии. Добавь недостающие из вакансии.
+
 {grade_instruction}
 {direction_instruction}
 
-ДОПОЛНИТЕЛЬНЫЕ ПРЕДПОЧТЕНИЯ:
-{extra_prefs}
-
 {rag_context}
 
-СТРОГИЕ ПРАВИЛА:
-1. Используй ТОЛЬКО реальные данные кандидата — не добавляй компании, технологии или опыт которого не было
-2. Переформулируй описание опыта под ключевые слова вакансии — там где это честно
-3. Используй reframeable пункты чтобы закрыть gaps — переформулируй, не выдумывай
-4. Продолжительность работы на каждом месте подбирай так чтобы суммарный стаж соответствовал грейду
-5. Summary пиши под конкретную вакансию и грейд
+═══ ЧТО МОЖНО УЛУЧШИТЬ ═══
+{reframeable}
 
-Верни ТОЛЬКО валидный JSON без комментариев:
+Верни ТОЛЬКО валидный JSON:
 {{
-  "name": "ФИО",
-  "contacts": "телефон, email, город — через запятую",
-  "summary": "3-4 предложения о кандидате под этот грейд и вакансию",
+  "name": "{name}",
+  "contacts": "{contacts}",
+  "summary": "новый summary",
   "experience": [
     {{
-      "company": "название компании",
+      "company": "название",
       "role": "должность",
-      "start": "месяц год, например Март 2022",
-      "end": "месяц год или 'по настоящее время'",
-      "description": "2-4 пункта через \\n, начиная с тире"
+      "start": "дата",
+      "end": "дата",
+      "description": "- пункт 1\\n- пункт 2\\n- пункт 3"
     }}
   ],
   "skills": ["навык1", "навык2"],
   "education": [
     {{
-      "institution": "название учебного заведения",
-      "degree": "степень и специальность",
-      "year": "год окончания"
+      "institution": "название",
+      "degree": "степень",
+      "year": "год"
     }}
   ]
 }}"""
@@ -80,6 +89,22 @@ def _build_extra_prefs_str(extra_prefs: dict) -> str:
     return "\n".join(lines) if lines else "Не указано"
 
 
+def _format_experience(extracted: ExtractedResume) -> str:
+    lines = []
+    for exp in extracted.experience:
+        lines.append(f"Компания: {exp.company} | Роль: {exp.role} | {exp.start} – {exp.end}")
+        lines.append(f"Описание: {exp.description}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_education(extracted: ExtractedResume) -> str:
+    return "; ".join(
+        f"{e.institution}, {e.degree}, {e.year}"
+        for e in extracted.education
+    ) or "не указано"
+
+
 async def adapt_resume(
     extracted: ExtractedResume,
     vacancy: VacancyAnalysis,
@@ -89,21 +114,34 @@ async def adapt_resume(
     extra_prefs: dict,
     rag_context: str = "",
 ) -> ResumeData:
+    # Топ-8 ключевых слов из вакансии — даём модели явный список для инжекции
+    top_keywords = ", ".join((vacancy.keywords + vacancy.must_have)[:8])
+
+    reframeable_text = (
+        "\n".join(f"- {r}" for r in gaps.reframeable)
+        if gaps.reframeable else "нет"
+    )
+
     data = await llm_json(
         _PROMPT.format(
-            extracted_json=json.dumps(asdict(extracted), ensure_ascii=False, indent=2),
-            gap_json=json.dumps(asdict(gaps), ensure_ascii=False, indent=2),
-            vacancy_json=json.dumps(asdict(vacancy), ensure_ascii=False, indent=2),
+            role_essence=vacancy.role_essence,
+            top_keywords=top_keywords,
             grade=grade,
+            name=extracted.name,
+            contacts=extracted.contacts,
+            experience_text=_format_experience(extracted),
+            skills=", ".join(extracted.skills),
+            education_text=_format_education(extracted),
+            reframeable=reframeable_text,
             direction=direction,
             grade_instruction=GRADE_INSTRUCTIONS.get(grade, ""),
             direction_instruction=DIRECTION_INSTRUCTIONS.get(direction, ""),
-            extra_prefs=_build_extra_prefs_str(extra_prefs),
             rag_context=rag_context,
         ),
-        temperature=0.7,
+        temperature=0.75,
     )
 
+    raw_experience = data.get("experience", [])
     experience = [
         ExperienceItem(
             company=e.get("company", ""),
@@ -112,8 +150,19 @@ async def adapt_resume(
             end=e.get("end", ""),
             description=e.get("description", ""),
         )
-        for e in data.get("experience", [])
+        for e in raw_experience
     ]
+
+    # Последнее место работы всегда "по настоящее время"
+    if experience:
+        last = experience[-1]
+        experience[-1] = ExperienceItem(
+            company=last.company,
+            role=last.role,
+            start=last.start,
+            end="по настоящее время",
+            description=last.description,
+        )
     education = [
         EducationItem(
             institution=e.get("institution", ""),
